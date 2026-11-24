@@ -1,7 +1,7 @@
 """Policy tests. These run without Windows and without a live Cursor window."""
 
 from cursor_auto_run.decision import evaluate
-from cursor_auto_run.safety import RunMode, redact
+from cursor_auto_run.safety import MAX_CONTEXT_CHARS, RunMode, redact
 
 SAFE = RunMode.SAFE
 NORMAL = RunMode.NORMAL
@@ -125,7 +125,7 @@ def test_regex_rule_allows_one_script_in_safe_mode():
 def test_missing_or_wide_context_fails_closed():
     assert not decision("", SAFE).click
     assert not evaluate("Run", "Type the command you want to run", SAFE).click
-    wide = "pytest -q\n" + ("x" * 1200)
+    wide = "pytest -q\n" + ("x" * MAX_CONTEXT_CHARS)
     assert not evaluate("Run", wide, SAFE).click
     many = "\n".join(
         ["pytest -q", "git status", "dir", "npm test", "cargo test", "go test ./..."]
@@ -159,6 +159,34 @@ def test_compound_command_with_a_hidden_delete():
     result = decision("pytest -q && rm -rf dist", NORMAL, ["pytest"])
     assert not result.click
     assert result.category == "deletion"
+
+
+WORD_SCRIPT = """
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$word.DisplayAlerts = 0
+$src = "D:\\lab\\report.doc"
+$doc = $word.Documents.Open($src)
+foreach ($p in $doc.Paragraphs) {
+  $t = ($p.Range.Text -replace "[`r`n`a]","").Trim()
+  Write-Output ("{0} start={1}" -f $t, $p.Range.Start)
+}
+$doc.Close($false)
+$word.Quit()
+"""
+
+
+def test_visible_word_script_is_clicked_in_safe_mode():
+    result = evaluate("Run step", WORD_SCRIPT, SAFE)
+    assert result.click, result.reason
+    assert "New-Object" in result.command
+    assert not evaluate("Run step", WORD_SCRIPT, MANUAL).click
+    assert not evaluate("Skip step", WORD_SCRIPT, SAFE).click
+    assert not evaluate("Always Run", WORD_SCRIPT, SAFE).click
+    denied = WORD_SCRIPT + "\nRemove-Item -Recurse dist\n"
+    blocked = evaluate("Run step", denied, SAFE)
+    assert not blocked.click
+    assert blocked.category == "deletion"
 
 
 def test_redaction_hides_secret_values():

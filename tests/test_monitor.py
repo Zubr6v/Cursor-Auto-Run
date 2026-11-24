@@ -171,3 +171,50 @@ def test_walker_uses_the_approval_card_and_ignores_reject():
     assert any(name == "Reject" for name in report.blocked_names)
     assert activities[-1].kind == "clicked"
     assert "pytest -q" in activities[-1].command
+
+
+WORD_SCRIPT = """$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$src = "D:\\lab\\report.doc"
+$doc = $word.Documents.Open($src)
+Write-Output $doc.Paragraphs.Count
+$doc.Close($false)
+$word.Quit()
+"""
+
+
+def test_run_step_next_to_skip_clicks_the_word_script():
+    card = _Node(
+        "approval",
+        "GroupControl",
+        [
+            _Node(WORD_SCRIPT, "TextControl"),
+            _Node("Allowlist", "SplitButtonControl", runtime=(3,)),
+            _Node("Skip step", "ButtonControl", runtime=(4,)),
+            _Node("Always Run", "ButtonControl", runtime=(5,)),
+            _Node("Run step", "CustomControl", runtime=(6,)),
+            _Node("Run", "MenuItemControl", runtime=(9,)),
+        ],
+    )
+    window = _Node("Cursor", "WindowControl", [card], runtime=(1,))
+    scanner = _TreeScanner(window)
+    monitor, _clock = _monitor(scanner)
+    activities, report = monitor.tick(MonitorConfig(enabled=True, mode=RunMode.SAFE, delay_ms=0))
+    assert scanner.invoked == ["6"]
+    assert activities[-1].kind == "clicked"
+    assert "New-Object" in activities[-1].command
+    assert "Skip step" in report.blocked_names
+    assert "Always Run" in report.blocked_names
+    assert all(button.name != "Allowlist" for button in report.buttons)
+
+
+def test_menu_run_without_an_approval_card_is_ignored():
+    window = _Node(
+        "Cursor",
+        "WindowControl",
+        [_Node("Run", "MenuItemControl", runtime=(2,)), _Node("Run", "ButtonControl", runtime=(3,))],
+        runtime=(1,),
+    )
+    _buttons, blocked, _notes = collect_buttons(window, window_title="Cursor")
+    assert _buttons == []
+    assert blocked == []

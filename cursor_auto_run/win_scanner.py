@@ -110,22 +110,16 @@ class WindowsCursorScanner:
         control = self._live.get(runtime_id)
         if control is None:
             return InvokeResult(False, "кнопка вже зникла, Invoke не викликано")
-        try:
-            pattern = control.GetInvokePattern()  # type: ignore[attr-defined]
-        except Exception as exc:
-            return InvokeResult(False, f"InvokePattern недоступний: {exc}")
-        if pattern is None:
-            return InvokeResult(
-                False,
-                "у кнопки немає InvokePattern. Клік мишею і надсилання клавіш вимкнені.",
-            )
-        try:
-            ok = bool(pattern.Invoke(waitTime=0))
-        except Exception as exc:
-            return InvokeResult(False, f"Invoke завершився помилкою: {exc}")
-        if not ok:
-            return InvokeResult(False, "Invoke повернув помилку, кнопку не натиснуто")
-        return InvokeResult(True, "InvokePattern.Invoke")
+        invoked = _try_invoke(control)
+        if invoked is None:
+            return InvokeResult(True, "InvokePattern.Invoke")
+        legacy = _try_legacy(control)
+        if legacy is None:
+            return InvokeResult(True, "LegacyIAccessible.DoDefaultAction")
+        clicked = _try_element_click(control)
+        if clicked is None:
+            return InvokeResult(True, "клацання по знайденій кнопці Run")
+        return InvokeResult(False, invoked)
 
     def _process_name(self, pid: int) -> str:
         cached = self._names.get(pid)
@@ -134,6 +128,53 @@ class WindowsCursorScanner:
         name = _query_process_image(pid)
         self._names[pid] = name
         return name
+
+
+def _try_invoke(control: object) -> str | None:
+    try:
+        pattern = control.GetInvokePattern()  # type: ignore[attr-defined]
+    except Exception as exc:
+        return f"InvokePattern недоступний: {exc}"
+    if pattern is None:
+        return "у кнопки немає InvokePattern"
+    try:
+        ok = bool(pattern.Invoke(waitTime=0))
+    except Exception as exc:
+        return f"Invoke завершився помилкою: {exc}"
+    if not ok:
+        return "Invoke повернув помилку, кнопку не натиснуто"
+    return None
+
+
+def _try_legacy(control: object) -> str | None:
+    getter = getattr(control, "GetLegacyIAccessiblePattern", None)
+    if getter is None:
+        return "LegacyIAccessible недоступний"
+    try:
+        pattern = getter()
+    except Exception as exc:
+        return f"LegacyIAccessible недоступний: {exc}"
+    if pattern is None:
+        return "у кнопки немає LegacyIAccessible"
+    try:
+        ok = bool(pattern.DoDefaultAction(waitTime=0))
+    except Exception as exc:
+        return f"DoDefaultAction завершився помилкою: {exc}"
+    if not ok:
+        return "DoDefaultAction повернув помилку"
+    return None
+
+
+def _try_element_click(control: object) -> str | None:
+    """Click that element only. No key is sent to the Cursor window."""
+    click = getattr(control, "Click", None)
+    if click is None:
+        return "кнопка не має методу Click"
+    try:
+        click(simulateMove=False, waitTime=0)
+    except Exception as exc:
+        return f"клацання по кнопці не вдалося: {exc}"
+    return None
 
 
 def _query_process_image(pid: int) -> str:

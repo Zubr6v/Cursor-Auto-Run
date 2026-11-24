@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-MAX_CONTEXT_CHARS = 1200
+MAX_CONTEXT_CHARS = 8000
 MAX_COMMANDS = 4
 MAX_CUSTOM_PATTERN = 200
 
@@ -40,6 +40,8 @@ HARD_BLOCK_SUBSTRINGS = (
     "do not run",
     "do not allow",
     "don't allow",
+    "always run",
+    "always allow",
 )
 
 DEFAULT_APPROVAL_LABELS = (
@@ -49,6 +51,25 @@ DEFAULT_APPROVAL_LABELS = (
     "run command",
     "continue",
     "run in sandbox",
+)
+
+_CARD_CHROME = frozenset(
+    {
+        "skip",
+        "skip step",
+        "always run",
+        "always allow",
+        "allowlist",
+        "allow list",
+        "allow-list",
+        "run",
+        "run step",
+        "reject",
+        "cancel",
+        "deny",
+        "allow",
+        "continue",
+    }
 )
 
 _UI_NOISE = frozenset(
@@ -258,7 +279,35 @@ def is_approval_button(name: str, extra_labels: list[str] | None = None) -> tupl
         allowed.add(extra)
     if label in allowed or label.startswith("allow once") or label.startswith("run in sandbox"):
         return True, ""
+    # Cursor names the blue button "Run" or "Run step", not only "Run".
+    if label == "run" or label.startswith("run "):
+        return True, ""
     return False, "не кнопка підтвердження команди"
+
+
+def looks_like_visible_script(text: str) -> bool:
+    """PowerShell shown inside one approval card, including a single wrapped line."""
+    body = text or ""
+    if re.search(r"(?i)\$[A-Za-z_][\w]*\s*=", body) is None:
+        return False
+    if body.count("\n") >= 1:
+        return True
+    return re.search(r"(?i)\bNew-Object\b|\b-ComObject\b|\bWrite-Output\b|\bforeach\b", body) is not None
+
+
+def _script_body(text: str) -> str:
+    lines: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        label = normalize_label(line)
+        if label in _UI_NOISE or label in _CARD_CHROME or label.startswith("skip "):
+            continue
+        if len(line) < 40 and is_approval_button(line)[0]:
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def redact(command: str) -> str:
@@ -300,6 +349,10 @@ def extract_commands(text: str, custom_rules: list[str] | None = None) -> list[s
             continue
         seen.add(key)
         found.append(prepared)
+    if looks_like_visible_script(cleaned):
+        script = _script_body(cleaned)
+        if script:
+            return [script]
     return found
 
 
@@ -320,6 +373,46 @@ def classify_command(command: str, custom_rules: list[str] | None = None) -> Seg
             "завантаження або віддалений код потребує ручного підтвердження",
         )
     visible = _mask_quotes(raw)
+    if looks_like_visible_script(raw):
+        if "$(" in visible or "${" in visible:
+            return SegmentVerdict(
+                "unknown",
+                "",
+                "substitution",
+                "підстановка команди прихована, потрібне ручне підтвердження",
+            )
+        if re.search(
+            r"(?i)\b(?:remove-item|clear-item|clear-content|out-file|set-content|"
+            r"add-content|tee-object)\b|\brm\s+-",
+            raw,
+        ):
+            return SegmentVerdict(
+                "deny",
+                "",
+                "deletion",
+                "видалення або перезапис у скрипті потребує ручного підтвердження",
+            )
+        if re.search(r"(?i)\b(?:invoke-expression|start-process)\b|\biex\b", raw):
+            return SegmentVerdict(
+                "deny",
+                "",
+                "scripts",
+                "запуск іншої команди зі скрипта потребує ручного підтвердження",
+            )
+        for line in raw.splitlines():
+            piece = line.strip().rstrip("{").strip()
+            if not piece or re.fullmatch(r"[{}]+", piece) or piece in {"else", "elseif"}:
+                continue
+            for segment in _split_segments(piece):
+                line_verdict = _classify_segment(segment)
+                if line_verdict.outcome == "deny":
+                    return line_verdict
+        return SegmentVerdict(
+            "allow",
+            "safe",
+            "allowed",
+            "видимий скрипт без заборонених дій",
+        )
     if "$(" in visible or "${" in visible or "`" in visible:
         return SegmentVerdict(
             "unknown",

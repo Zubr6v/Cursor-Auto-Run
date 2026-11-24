@@ -18,6 +18,19 @@ from cursor_auto_run.safety import (
 
 NodeText = Callable[[object], str]
 BUTTON_TYPES = frozenset({"ButtonControl", "SplitButtonControl", "HyperlinkControl"})
+_CLICKABLE_TYPES = BUTTON_TYPES | {"CustomControl"}
+_ACTION_TYPES = _CLICKABLE_TYPES | {"TextControl", "GroupControl", "PaneControl", "ListItemControl"}
+_CARD_MARKERS = (
+    "skip",
+    "reject",
+    "cancel",
+    "deny",
+    "allowlist",
+    "allow list",
+    "always run",
+    "always allow",
+    "dismiss",
+)
 
 
 def choose_context(levels_near_to_far: list[str], custom_rules: list[str] | None = None) -> str:
@@ -70,7 +83,7 @@ def collect_buttons(
                 truncated = True
                 return
             control_type = _control_type(child)
-            if control_type in BUTTON_TYPES:
+            if control_type in _ACTION_TYPES:
                 _consider(
                     child,
                     ancestors,
@@ -87,7 +100,7 @@ def collect_buttons(
     walk(window, [], 0)
     if truncated:
         notes.append("обхід дерева зупинено: забагато елементів")
-    return buttons, blocked, notes
+    return _prefer(buttons), blocked, notes
 
 
 def _consider(
@@ -106,9 +119,15 @@ def _consider(
         return
     approved, blocked_reason = is_approval_button(name, extra_labels)
     if not approved and blocked_reason.startswith("кнопку"):
-        blocked.append(name.strip())
+        if name.strip() not in blocked:
+            blocked.append(name.strip())
         return
     if not approved:
+        return
+    control_type = _control_type(node)
+    if control_type not in _CLICKABLE_TYPES and _clickable_sibling(ancestors, text_of, extra_labels):
+        return
+    if not _in_approval_card(ancestors, text_of):
         return
     levels: list[str] = []
     for ancestor in ancestors[:5]:
@@ -131,6 +150,73 @@ def _consider(
     )
     if on_button is not None:
         on_button(buttons[-1], node)
+
+
+def _prefer(buttons: list[ButtonHit]) -> list[ButtonHit]:
+    """Keep one Run button per card. Skip and Always Run never reach this list."""
+    best: dict[str, ButtonHit] = {}
+    for button in buttons:
+        key = button.window_title + "\n" + button.context_text[:240]
+        current = best.get(key)
+        if current is None or _rank(button.name) < _rank(current.name):
+            best[key] = button
+    return list(best.values())
+
+
+def _rank(name: str) -> int:
+    label = normalize_label(name)
+    if label in {"run", "run step"}:
+        return 0
+    if label.startswith("run "):
+        return 1
+    if label in {"allow", "allow once"} or label.startswith("allow once"):
+        return 2
+    return 3
+
+
+def _clickable_sibling(ancestors: list[object], text_of: NodeText, extra_labels: list[str]) -> bool:
+    if not ancestors:
+        return False
+    try:
+        children = list(ancestors[0].GetChildren())  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    for child in children[:80]:
+        if _control_type(child) not in _CLICKABLE_TYPES:
+            continue
+        label = text_of(child).split("\n", 1)[0]
+        if is_approval_button(label, extra_labels)[0]:
+            return True
+    return False
+
+
+def _in_approval_card(ancestors: list[object], text_of: NodeText) -> bool:
+    """Run in the menu bar is not an approval. The card also shows Skip or Reject."""
+    for ancestor in ancestors[:4]:
+        try:
+            children = list(ancestor.GetChildren())  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        if _children_have_marker(children, text_of):
+            return True
+    return False
+
+
+def _children_have_marker(children: list[object], text_of: NodeText) -> bool:
+    for child in children[:80]:
+        label = normalize_label(text_of(child).split("\n", 1)[0])
+        if any(marker in label for marker in _CARD_MARKERS):
+            return True
+        if _control_type(child) in {"GroupControl", "PaneControl", "CustomControl", "ToolBarControl"}:
+            try:
+                nested = list(child.GetChildren())  # type: ignore[attr-defined]
+            except Exception:
+                nested = []
+            for item in nested[:40]:
+                nested_label = normalize_label(text_of(item).split("\n", 1)[0])
+                if any(marker in nested_label for marker in _CARD_MARKERS):
+                    return True
+    return False
 
 
 def _default_text(node: object) -> str:
