@@ -155,6 +155,7 @@ def test_missing_or_wide_context_fails_closed():
 
 
 def test_button_names():
+    assert decision("pytest -q", SAFE, button="Run step 2 of 3").click
     assert decision("pytest -q", SAFE, button="Allow once").click
     assert decision("pytest -q", SAFE, button="Run (Enter)").click
     assert decision("pytest -q", SAFE, button="Run in sandbox").click

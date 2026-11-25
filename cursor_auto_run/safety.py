@@ -280,8 +280,12 @@ def is_approval_button(name: str, extra_labels: list[str] | None = None) -> tupl
         allowed.add(extra)
     if label in allowed or label.startswith("allow once") or label.startswith("run in sandbox"):
         return True, ""
-    # Cursor names the blue button "Run" or "Run step", not only "Run".
-    if label == "run" or label.startswith("run "):
+    # Cursor names the blue button "Run", "Run step" or "Run step 2 of 3".
+    if re.match(r"run\b", label):
+        return True, ""
+    if label in {"запустити", "виконати", "дозволити"} or label.startswith(
+        ("запустити ", "виконати ", "дозволити ")
+    ):
         return True, ""
     return False, "не кнопка підтвердження команди"
 

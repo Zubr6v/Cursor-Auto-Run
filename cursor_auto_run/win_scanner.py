@@ -204,11 +204,23 @@ def _query_process_image(pid: int) -> str:
 
 
 def _uia_text(auto, control: object) -> str:
+    parts: list[str] = []
+    for attr in ("Name", "HelpText", "AutomationId"):
+        try:
+            value = str(getattr(control, attr) or "").strip()
+        except Exception:
+            value = ""
+        if value and value not in parts:
+            parts.append(value)
     try:
-        name = (control.Name or "").strip()  # type: ignore[attr-defined]
+        aria = str(control.AriaProperties or "")  # type: ignore[attr-defined]
     except Exception:
-        name = ""
-    parts = [name] if name else []
+        aria = ""
+    match = re.search(r"(?:^|;)\s*label=([^;]+)", aria, re.IGNORECASE)
+    if match:
+        label = match.group(1).strip().strip("\"'")
+        if label and label not in parts:
+            parts.append(label)
     try:
         control_type = control.ControlTypeName  # type: ignore[attr-defined]
     except Exception:
@@ -219,6 +231,6 @@ def _uia_text(auto, control: object) -> str:
             value = (pattern.Value or "").strip() if pattern is not None else ""
         except Exception:
             value = ""
-        if value and value not in name:
+        if value and value not in "\n".join(parts):
             parts.append(value[:400])
     return "\n".join(parts)

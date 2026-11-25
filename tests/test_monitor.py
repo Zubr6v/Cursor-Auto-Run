@@ -216,6 +216,45 @@ def test_run_step_next_to_skip_clicks_the_word_script():
     assert all(button.name != "Allowlist" for button in report.buttons)
 
 
+def test_unnamed_run_beside_skip_step_counter_is_clicked():
+    card = _Node(
+        "approval",
+        "GroupControl",
+        [
+            _Node(WORD_SCRIPT, "TextControl"),
+            _Node("Allowlist", "SplitButtonControl", runtime=(3,)),
+            _Node("Skip step 2 of 3", "ButtonControl", runtime=(4,)),
+            _Node("Always run step 2 of 3", "ButtonControl", runtime=(5,)),
+            _Node("", "ButtonControl", runtime=(6,)),
+        ],
+    )
+    window = _Node("Cursor", "WindowControl", [card], runtime=(1,))
+    scanner = _TreeScanner(window)
+    monitor, _clock = _monitor(scanner)
+    activities, report = monitor.tick(MonitorConfig(enabled=True, mode=RunMode.SAFE, delay_ms=0))
+    assert scanner.invoked == ["6"]
+    assert activities[-1].kind == "clicked"
+    assert any(button.runtime_id == "6" for button in report.buttons)
+
+
+def test_image_named_run_step_counter_is_clicked():
+    card = _Node(
+        "approval",
+        "GroupControl",
+        [
+            _Node("pytest -q", "TextControl"),
+            _Node("Skip step 2 of 3", "ButtonControl", runtime=(4,)),
+            _Node("Run step 2 of 3", "ImageControl", runtime=(6,)),
+        ],
+    )
+    window = _Node("Cursor", "WindowControl", [card], runtime=(1,))
+    scanner = _TreeScanner(window)
+    monitor, _clock = _monitor(scanner)
+    activities, _report = monitor.tick(MonitorConfig(enabled=True, mode=RunMode.SAFE, delay_ms=0))
+    assert scanner.invoked == ["6"]
+    assert activities[-1].kind == "clicked"
+
+
 def test_menu_run_without_an_approval_card_is_ignored():
     window = _Node(
         "Cursor",
