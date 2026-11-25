@@ -115,6 +115,8 @@ def test_all_mode_confirms_every_run_button():
         result = decision(command, ALL)
         assert result.click, command
         assert result.reason.startswith("режим «Усі»")
+    assert not decision("Go Back\nGo Forward", ALL).click
+    assert not decision("Settings", ALL).click
     assert not decision("rm -rf dist", ALL, button="Skip").click
     assert not decision("rm -rf dist", ALL, button="Always Run").click
     assert not decision("rm -rf dist", ALL, button="Reject").click

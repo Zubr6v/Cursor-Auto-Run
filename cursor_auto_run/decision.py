@@ -34,6 +34,13 @@ def evaluate(
             "",
             "manual",
         )
+    if _navigation_only(context):
+        return ClickDecision(
+            False,
+            "це кнопки навігації Cursor, а не підтвердження команди",
+            _shown_command(context, rules),
+            "button",
+        )
     if selected is RunMode.ALL:
         return ClickDecision(
             True,
@@ -91,6 +98,14 @@ def evaluate(
             "mode",
         )
     return ClickDecision(True, "команда дозволена правилами", " && ".join(shown), "allowed")
+
+
+def _navigation_only(context: str) -> bool:
+    lines = [line.strip() for line in (context or "").splitlines() if line.strip()]
+    if not lines:
+        return False
+    labels = {"go back", "go forward", "back", "forward", "settings"}
+    return all(line.lower() in labels for line in lines)
 
 
 def _shown_command(context: str, rules: list[str]) -> str:

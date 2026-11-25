@@ -255,6 +255,55 @@ def test_image_named_run_step_counter_is_clicked():
     assert activities[-1].kind == "clicked"
 
 
+def test_settings_and_navigation_are_not_used_as_run():
+    nav = _Node(
+        "nav",
+        "GroupControl",
+        [
+            _Node("Skip step 2 of 3", "ButtonControl", runtime=(4,)),
+            _Node("Settings", "ButtonControl", runtime=(5,)),
+            _Node("Go Back", "ButtonControl", runtime=(6,)),
+            _Node("Go Forward", "ButtonControl", runtime=(7,)),
+        ],
+    )
+    window = _Node("Cursor", "WindowControl", [nav], runtime=(1,))
+    buttons, _blocked, _notes = collect_buttons(window, window_title="Cursor")
+    assert buttons == []
+
+
+def test_command_card_run_is_clicked_instead_of_settings():
+    command = (
+        "Get-ChildItem C:\\Windows\\Fonts\\times*.ttf | Select Name; "
+        "$w = New-Object -ComObject Word.Application"
+    )
+    toolbar = _Node(
+        "toolbar",
+        "GroupControl",
+        [
+            _Node("Skip step 2 of 3", "ButtonControl", runtime=(4,)),
+            _Node("Always Run", "ButtonControl", runtime=(5,)),
+            _Node("Settings", "ButtonControl", runtime=(8,)),
+            _Node("Run step 2 of 3", "ButtonControl", runtime=(6,)),
+        ],
+    )
+    card = _Node("card", "GroupControl", [_Node(command, "TextControl"), toolbar])
+    nav = _Node(
+        "nav",
+        "GroupControl",
+        [
+            _Node("Go Back", "ButtonControl", runtime=(11,)),
+            _Node("Go Forward", "ButtonControl", runtime=(12,)),
+        ],
+    )
+    window = _Node("Cursor", "WindowControl", [nav, card], runtime=(1,))
+    scanner = _TreeScanner(window)
+    monitor, _clock = _monitor(scanner)
+    activities, _report = monitor.tick(MonitorConfig(enabled=True, mode=RunMode.SAFE, delay_ms=0))
+    assert scanner.invoked == ["6"]
+    assert activities[-1].kind == "clicked"
+    assert "Get-ChildItem" in activities[-1].command
+
+
 def test_menu_run_without_an_approval_card_is_ignored():
     window = _Node(
         "Cursor",

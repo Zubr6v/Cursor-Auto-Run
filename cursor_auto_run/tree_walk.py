@@ -14,6 +14,7 @@ from cursor_auto_run.safety import (
     MAX_CONTEXT_CHARS,
     extract_commands,
     is_approval_button,
+    looks_like_visible_script,
     normalize_label,
 )
 
@@ -35,7 +36,37 @@ _IGNORE_TYPES = frozenset(
         "ProgressBarControl",
     }
 )
-_NOT_RUN_WORDS = ("stop", "copy", "edit", "undo", "retry", "pause", "close", "show more")
+_NOT_RUN_WORDS = ("stop", "copy", "undo", "retry", "pause", "close", "show more")
+_CHROME_LABELS = (
+    "settings",
+    "setting",
+    "go back",
+    "go forward",
+    "back",
+    "forward",
+    "search",
+    "new chat",
+    "new project",
+    "files",
+    "changes",
+    "terminal",
+    "browser",
+    "canvas",
+    "side chat",
+    "customize",
+    "automations",
+    "projects",
+    "repositories",
+    "help",
+    "file",
+    "edit",
+    "view",
+)
+_AGENT_COMMAND_RE = re.compile(
+    r"(?i)(\$[A-Za-z_]\w*\s*=|\bNew-Object\b|\bGet-ChildItem\b|\bGet-Content\b|"
+    r"\bSelect-String\b|\bpip3?\b|\bpytest\b|\bnpm\b|\bgit\b|\bpython\b|"
+    r"\bWrite-Output\b|\bforeach\b|\b-ComObject\b)"
+)
 _CARD_MARKERS = (
     "skip",
     "reject",
@@ -225,59 +256,138 @@ def _take_run_sibling(
     notes: list[str],
     on_button: Callable[[ButtonHit, object], None] | None,
 ) -> None:
-    """The blue Run button often has no useful name. It sits in the same row as Skip."""
-    pool = _row_children(ancestors)
-    if not pool:
+    """Find Run inside the command card. Never treat Settings or Go Back as Run."""
+    nodes = _command_card_nodes(ancestors, text_of)
+    if not nodes:
+        _note_nearby(ancestors, text_of, notes, "поруч із Skip немає команди")
         return
-    candidates: list[tuple[int, object, str]] = []
+    named: list[tuple[int, object, str]] = []
+    blank: list[tuple[int, object, str]] = []
     seen: list[str] = []
-    for index, child in enumerate(pool):
-        if child is skip_node:
+    for index, child in enumerate(nodes):
+        if child is skip_node or _control_type(child) in _IGNORE_TYPES:
             continue
-        if _control_type(child) in _IGNORE_TYPES | {"DocumentControl", "EditControl", "TreeControl"}:
+        own = _own_label(child, text_of)
+        if len(own) > 80:
             continue
-        label = _visible_label(child, text_of)
-        if len(label) > 80:
+        if own:
+            seen.append(own)
+        if _is_chrome(own) or (own and _is_blocked_label(own, extra_labels)):
             continue
-        if label:
-            seen.append(label)
-        else:
-            seen.append("без назви")
-        if label and _is_blocked_label(label, extra_labels):
+        if is_approval_button(own, extra_labels)[0]:
+            target = child
+            hit = own
+            if _control_type(child) not in _CLICKABLE_TYPES:
+                parent = _clickable_parent(child, nodes)
+                if parent is None:
+                    continue
+                target = parent
+            named.append((index, target, hit))
             continue
-        if label and _is_not_run(label):
-            continue
-        candidates.append((index, child, label))
-    if not candidates:
-        if seen and not any(note.startswith("поруч із Skip") for note in notes):
-            notes.append("поруч із Skip: " + ", ".join(seen[:6]))
+        if not own and _control_type(child) in _CLICKABLE_TYPES:
+            blank.append((index, child, own))
+    if named:
+        _index, node, label = _rightmost(named)
+        _add_button(node, label, ancestors, text_of, custom_rules, window_title, buttons, on_button)
         return
-    named = [item for item in candidates if _is_run_label(item[2], extra_labels)]
-    clickable = [item for item in candidates if _control_type(item[1]) in _CLICKABLE_TYPES]
-    chosen = _rightmost(named or clickable or candidates)
-    _index, node, label = chosen
-    hit_name = label if is_approval_button(label, extra_labels)[0] else "Run"
-    _add_button(node, hit_name, ancestors, text_of, custom_rules, window_title, buttons, on_button)
-    if hit_name == "Run" and not any(note.startswith("кнопку Run взято") for note in notes):
-        shown = label or "без назви"
-        notes.append(f"кнопку Run взято поруч із Skip ({shown})")
+    if blank:
+        _index, node, _label = _rightmost(blank)
+        _add_button(node, "Run", ancestors, text_of, custom_rules, window_title, buttons, on_button)
+        if not any(note.startswith("кнопку Run взято в картці") for note in notes):
+            notes.append("кнопку Run взято в картці команди (без назви)")
+        return
+    if seen and not any(note.startswith("у картці немає Run") for note in notes):
+        notes.append("у картці немає Run: " + ", ".join(seen[:8]))
 
 
-def _row_children(ancestors: list[object]) -> list[object]:
-    if not ancestors:
-        return []
+def _command_card_nodes(ancestors: list[object], text_of: NodeText) -> list[object]:
+    """Smallest container that holds both Skip and the agent command, not the whole window."""
+    for ancestor in ancestors[:6]:
+        text = _joined_text(ancestor, text_of)
+        if len(text) > 4000:
+            return []
+        nodes: list[object] = []
+        _collect_descendants(ancestor, 4, 80, nodes)
+        if len(nodes) >= 80:
+            return []
+        if _has_agent_command(text) and any(_is_skip_label(_own_label(node, text_of)) for node in nodes):
+            return nodes
+    return []
+
+
+def _collect_descendants(node: object, depth: int, limit: int, found: list[object]) -> None:
+    if depth < 0 or len(found) >= limit:
+        return
+    try:
+        children = list(node.GetChildren())  # type: ignore[attr-defined]
+    except Exception:
+        return
+    ordered = sorted(children, key=lambda child: _control_type(child) not in _CLICKABLE_TYPES)
+    for child in ordered:
+        if len(found) >= limit:
+            return
+        found.append(child)
+    for child in ordered:
+        _collect_descendants(child, depth - 1, limit, found)
+
+
+def _joined_text(node: object, text_of: NodeText) -> str:
+    chunks: list[str] = []
+    try:
+        children = list(node.GetChildren())  # type: ignore[attr-defined]
+    except Exception:
+        children = []
+    for child in children[:40]:
+        chunk = text_of(child).strip()
+        if chunk:
+            chunks.append(chunk[:500])
+    return "\n".join(chunks)
+
+
+def _has_agent_command(text: str) -> bool:
+    if looks_like_visible_script(text):
+        return True
+    return _AGENT_COMMAND_RE.search(text or "") is not None
+
+
+def _own_label(node: object, text_of: NodeText) -> str:
+    return text_of(node).split("\n", 1)[0].strip()
+
+
+def _clickable_parent(node: object, nodes: list[object]) -> object | None:
+    """Use the button that owns a short Run label instead of the text node itself."""
+    for candidate in nodes:
+        if _control_type(candidate) not in _CLICKABLE_TYPES:
+            continue
+        try:
+            children = list(candidate.GetChildren())  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        if any(child is node for child in children):
+            return candidate
+    return None
+
+
+def _is_chrome(label: str) -> bool:
+    text = normalize_label(label)
+    if not text:
+        return False
+    if any(text == item or text.startswith(item + " ") for item in _CHROME_LABELS):
+        return True
+    return _is_not_run(label)
+
+
+def _note_nearby(ancestors: list[object], text_of: NodeText, notes: list[str], prefix: str) -> None:
+    if any(note.startswith(prefix) for note in notes) or not ancestors:
+        return
     try:
         children = list(ancestors[0].GetChildren())  # type: ignore[attr-defined]
     except Exception:
-        children = []
-    if len(children) <= 2 and len(ancestors) > 1:
-        try:
-            wider = list(ancestors[1].GetChildren())  # type: ignore[attr-defined]
-        except Exception:
-            wider = []
-        if len(wider) > len(children):
-            return wider
-    return children
+        return
+    labels = [_own_label(child, text_of) or "без назви" for child in children[:8]]
+    labels = [label for label in labels if len(label) <= 40]
+    if labels:
+        notes.append(prefix + ": " + ", ".join(labels))
 
 
 def _is_blocked_label(label: str, extra_labels: list[str]) -> bool:
