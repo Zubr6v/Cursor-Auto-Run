@@ -5,6 +5,7 @@ from cursor_auto_run.safety import MAX_CONTEXT_CHARS, RunMode, redact
 
 SAFE = RunMode.SAFE
 NORMAL = RunMode.NORMAL
+ALL = RunMode.ALL
 MANUAL = RunMode.MANUAL
 
 
@@ -100,6 +101,26 @@ def test_quote_does_not_hide_a_real_command_or_block_a_message():
     assert allowed.click
     assert decision('git commit -m "use $(version)"', NORMAL).click
     assert not decision("echo $(whoami)", NORMAL).click
+
+
+def test_all_mode_confirms_every_run_button():
+    for command in (
+        "rm -rf dist",
+        "git push origin main",
+        "sudo reboot",
+        "python tools/unknown.py",
+        "echo $(whoami)",
+        "",
+    ):
+        result = decision(command, ALL)
+        assert result.click, command
+        assert result.reason.startswith("режим «Усі»")
+    assert not decision("rm -rf dist", ALL, button="Skip").click
+    assert not decision("rm -rf dist", ALL, button="Always Run").click
+    assert not decision("rm -rf dist", ALL, button="Reject").click
+    assert decision("pytest -q", SAFE).click
+    assert not decision("rm -rf dist", SAFE).click
+    assert not decision("rm -rf dist", NORMAL).click
 
 
 def test_unknown_script_is_not_clicked():

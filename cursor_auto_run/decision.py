@@ -34,6 +34,13 @@ def evaluate(
             "",
             "manual",
         )
+    if selected is RunMode.ALL:
+        return ClickDecision(
+            True,
+            "режим «Усі»: команду підтверджено",
+            _shown_command(context, rules),
+            "allowed",
+        )
     if context_is_unsandboxed(button_name, context):
         return ClickDecision(
             False,
@@ -84,3 +91,11 @@ def evaluate(
             "mode",
         )
     return ClickDecision(True, "команда дозволена правилами", " && ".join(shown), "allowed")
+
+
+def _shown_command(context: str, rules: list[str]) -> str:
+    commands = extract_commands(context, rules)
+    if commands:
+        return " && ".join(redact(command) for command in commands[:8])
+    first = next((line.strip() for line in (context or "").splitlines() if line.strip()), "")
+    return redact(first)

@@ -234,6 +234,7 @@ _BROAD_REGEX_PROBES = ("a", "b", "zz", "12")
 class RunMode(str, Enum):
     SAFE = "safe"
     NORMAL = "normal"
+    ALL = "all"
     MANUAL = "manual"
 
     @classmethod

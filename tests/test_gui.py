@@ -39,6 +39,10 @@ def test_preview_follows_the_selected_mode(tmp_path):
     window._mode_buttons["manual"].click()
     app.processEvents()
     assert window.set_preview_command("pytest -q").startswith("Не натискати")
+    window._mode_buttons["all"].click()
+    app.processEvents()
+    assert window.set_preview_command("rm -rf dist").startswith("Дозволено")
+    assert window.set_preview_command("git push origin main").startswith("Дозволено")
     window.shutdown()
 
 

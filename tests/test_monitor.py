@@ -101,6 +101,14 @@ def test_button_that_disappears_before_the_delay_is_not_clicked():
     assert scanner.invoked == []
 
 
+def test_all_mode_invokes_a_denied_command():
+    scanner = ScriptedScanner([_button("Run step", "Remove-Item -Recurse dist")])
+    monitor, _clock = _monitor(scanner)
+    activities, _report = monitor.tick(MonitorConfig(enabled=True, mode=RunMode.ALL, delay_ms=0))
+    assert scanner.invoked == ["1"]
+    assert activities[-1].kind == "clicked"
+
+
 def test_manual_mode_records_a_skip():
     scanner = ScriptedScanner([_button("Run", "pytest -q")])
     monitor, _clock = _monitor(scanner)
